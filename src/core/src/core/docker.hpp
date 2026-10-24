@@ -120,9 +120,10 @@ public:
    * Stops the container
    *
    * https://docs.docker.com/engine/api/v1.30/#tag/Container/operation/ContainerStop
-   * @param timeout_seconds: Number of seconds to wait before killing the container
+   * @param timeout_seconds: Number of seconds to wait before killing the container.
+   * A negative value lets the engine honor the container's configured StopTimeout.
    */
-  bool stop_by_id(std::string_view id, int timeout_seconds = 2) const;
+  bool stop_by_id(std::string_view id, int timeout_seconds = -1) const;
 
   /**
    * Removes the container
