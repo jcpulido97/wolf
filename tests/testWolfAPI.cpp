@@ -146,6 +146,21 @@ TEST_CASE("Pair APIs", "[API]") {
                       "\"h_scroll_acceleration\":10.199999809265137,"
                       "\"motion_controller_override\":\"AUTO\"}}]}"));
 
+  { // The encryption policy follows the environment
+    setenv("WOLF_LAN_ENCRYPTION_MODE", "optional", 1);
+    setenv("WOLF_WAN_ENCRYPTION_MODE", "required", 1);
+    response = req(curl.get(), HTTPMethod::GET, "http://localhost/api/v1/encryption");
+    REQUIRE(response);
+    REQUIRE_THAT(response->second,
+                 Equals("{\"success\":true,\"lan_mode\":\"optional\",\"wan_mode\":\"required\","
+                        "\"features\":[\"rtsp\",\"control_v2\",\"video\",\"audio\"]}"));
+    unsetenv("WOLF_LAN_ENCRYPTION_MODE");
+    unsetenv("WOLF_WAN_ENCRYPTION_MODE");
+    response = req(curl.get(), HTTPMethod::GET, "http://localhost/api/v1/encryption");
+    REQUIRE(response);
+    REQUIRE_THAT(response->second, ContainsSubstring("\"lan_mode\":\"disabled\",\"wan_mode\":\"optional\""));
+  }
+
   auto pair_promise = std::make_shared<boost::promise<std::string>>();
 
   // Simulate a Moonlight pairing request

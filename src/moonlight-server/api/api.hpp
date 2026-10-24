@@ -46,6 +46,17 @@ struct PairedClient {
   config::ClientSettings settings = {};
 };
 
+/**
+ * The stream encryption policy in effect, so a supervisor can confirm it before exposing the host
+ */
+struct EncryptionPolicyResponse {
+  bool success = true;
+  std::string lan_mode;
+  std::string wan_mode;
+  /** Streams this build encrypts when a session negotiates it */
+  std::vector<std::string> features;
+};
+
 struct PairedClientsResponse {
   bool success = true;
   std::vector<PairedClient> clients;
@@ -196,6 +207,7 @@ private:
   void endpoint_PendingPairRequest(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket);
   void endpoint_Pair(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket);
   void endpoint_PairedClients(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket);
+  void endpoint_EncryptionPolicy(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket);
   void endpoint_UnpairClient(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket);
 
   void endpoint_Apps(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket);

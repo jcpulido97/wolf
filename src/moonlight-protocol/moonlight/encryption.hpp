@@ -40,6 +40,18 @@ enum class Mode {
   REQUIRED = 2, // refuse clients that can't encrypt RTSP, control, video and audio
 };
 
+inline std::string_view to_string(Mode mode) {
+  switch (mode) {
+  case Mode::DISABLED:
+    return "disabled";
+  case Mode::OPTIONAL:
+    return "optional";
+  case Mode::REQUIRED:
+    return "required";
+  }
+  return "disabled";
+}
+
 /**
  * Parses 0/1/2 or disabled/optional/required (case insensitive); anything else returns fallback.
  */

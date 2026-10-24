@@ -57,6 +57,15 @@ void UnixSocketServer::endpoint_PairedClients(const HTTPRequest &req, std::share
   send_http(socket, 200, rfl::json::write(res));
 }
 
+void UnixSocketServer::endpoint_EncryptionPolicy(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
+  auto res = EncryptionPolicyResponse{
+      .success = true,
+      .lan_mode = std::string(moonlight::encryption::to_string(state::lan_encryption_mode())),
+      .wan_mode = std::string(moonlight::encryption::to_string(state::wan_encryption_mode())),
+      .features = {"rtsp", "control_v2", "video", "audio"}};
+  send_http(socket, 200, rfl::json::write(res));
+}
+
 void UnixSocketServer::endpoint_UnpairClient(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
   try {
     auto payload_result = rfl::json::read<UnpairClientRequest>(req.body);

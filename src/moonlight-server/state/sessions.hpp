@@ -95,12 +95,18 @@ inline bool is_lan_address(const std::string &ip) {
  * The encryption policy for a client, from WOLF_LAN_ENCRYPTION_MODE and WOLF_WAN_ENCRYPTION_MODE
  * (disabled|optional|required, or Sunshine's 0|1|2). Defaults: disabled on the LAN, optional elsewhere.
  */
-inline moonlight::encryption::Mode encryption_mode_for(const std::string &client_ip) {
+inline moonlight::encryption::Mode lan_encryption_mode() {
   using moonlight::encryption::Mode;
-  if (is_lan_address(client_ip)) {
-    return moonlight::encryption::parse_mode(utils::get_env("WOLF_LAN_ENCRYPTION_MODE", "disabled"), Mode::DISABLED);
-  }
+  return moonlight::encryption::parse_mode(utils::get_env("WOLF_LAN_ENCRYPTION_MODE", "disabled"), Mode::DISABLED);
+}
+
+inline moonlight::encryption::Mode wan_encryption_mode() {
+  using moonlight::encryption::Mode;
   return moonlight::encryption::parse_mode(utils::get_env("WOLF_WAN_ENCRYPTION_MODE", "optional"), Mode::OPTIONAL);
+}
+
+inline moonlight::encryption::Mode encryption_mode_for(const std::string &client_ip) {
+  return is_lan_address(client_ip) ? lan_encryption_mode() : wan_encryption_mode();
 }
 
 inline std::shared_ptr<events::StreamSession>

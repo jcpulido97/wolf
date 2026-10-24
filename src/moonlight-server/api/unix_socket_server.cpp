@@ -72,6 +72,16 @@ UnixSocketServer::UnixSocketServer(boost::asio::io_context &io_context,
                    });
 
   state_->http.add(
+      HTTPMethod::GET,
+      "/api/v1/encryption",
+      {
+          .summary = "Get the stream encryption policy",
+          .description = "The LAN and WAN encryption modes in effect and the streams this build encrypts.",
+          .response_description = {{200, {.json_schema = rfl::json::to_schema<EncryptionPolicyResponse>()}}},
+          .handler = [this](auto req, auto socket) { endpoint_EncryptionPolicy(req, socket); },
+      });
+
+  state_->http.add(
       HTTPMethod::POST,
       "/api/v1/clients/settings",
       {
