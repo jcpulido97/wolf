@@ -18,6 +18,7 @@ set(SRC_LIST
         main.cpp
         testControl.cpp
         testCrypto.cpp
+        testPairedCertificate.cpp
         testGSTPlugin.cpp
         testMoonlight.cpp
         testRTSP.cpp

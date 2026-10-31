@@ -63,6 +63,10 @@ void UnixSocketServer::endpoint_EncryptionPolicy(const HTTPRequest &req, std::sh
       .lan_mode = std::string(moonlight::encryption::to_string(state::lan_encryption_mode())),
       .wan_mode = std::string(moonlight::encryption::to_string(state::wan_encryption_mode())),
       .features = {"rtsp", "control_v2", "video", "audio"}};
+  if (std::string(utils::get_env("WOLF_REQUIRE_SESSION_AUTHORIZATION", "FALSE")) == "TRUE" ||
+      !std::string(utils::get_env("WOLF_SESSION_AUTHORIZATION_SOCKET", "")).empty()) {
+    res.features.push_back("session_authorization");
+  }
   send_http(socket, 200, rfl::json::write(res));
 }
 

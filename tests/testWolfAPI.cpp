@@ -821,3 +821,14 @@ TEST_CASE("SSE APIs", "[API]") {
   REQUIRE_THAT(event->event, Equals("wolf::core::events::IDRRequestEvent"));
   REQUIRE_THAT(event->data, Equals("{\"session_id\":\"42\"}"));
 }
+
+TEST_CASE("Unix control socket has no world permissions", "[Security][SocketSecurity]") {
+  const auto dir = std::filesystem::temp_directory_path() / ("wolf-socket-permissions-" + state::gen_uuid());
+  std::filesystem::create_directories(dir);
+  auto cleanup = std::shared_ptr<void>(nullptr, [dir](void *) { std::filesystem::remove_all(dir); });
+  const auto path = (dir / "wolf.sock").string();
+  boost::asio::io_context io;
+  UnixSocketServer server(io, path, immer::box<state::AppState>(state::AppState{}));
+  REQUIRE((std::filesystem::status(path).permissions() & std::filesystem::perms::others_all) ==
+          std::filesystem::perms::none);
+}

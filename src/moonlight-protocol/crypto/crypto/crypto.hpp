@@ -258,7 +258,8 @@ std::string get_cert_pem(x509_ptr cert);
 std::string get_cert_public_key(x509_ptr cert);
 
 /**
- * Checks that the paired_cert is a valid chain for untrusted_cert.
+ * Checks that untrusted_cert is the exact certificate authorized by pairing.
+ * Certificate authorities, matching subjects and public keys do not grant identity.
  * @return std::nullopt if the verification runs fine, else the error message
  */
 std::optional<std::string> verification_error(x509_ptr paired_cert, x509_ptr untrusted_cert);

@@ -1,4 +1,6 @@
 #include <crypto/src/sign.hpp>
+#include <fstream>
+#include <future>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
@@ -557,4 +559,158 @@ TEST_CASE("Multiple users", "[HTTP]") {
 
   REQUIRE(session4->video_stream_port == 48100);
   REQUIRE(session4->audio_stream_port == 48200);
+}
+
+// Exercise the real launch/resume handlers with a paired client, no product
+// session authority, and no runner listeners. No game or container is started.
+TEST_CASE("Paired clients cannot launch or resume without session authority", "[Security][StreamAuthorization]") {
+  const auto dir = std::filesystem::temp_directory_path() / ("wolf-authz-" + state::gen_uuid());
+  std::filesystem::create_directories(dir);
+  auto cleanup = std::shared_ptr<void>(nullptr, [dir](void *) {
+    unsetenv("WOLF_SESSION_AUTHORIZATION_SOCKET");
+    std::filesystem::remove_all(dir);
+  });
+  setenv("WOLF_SESSION_AUTHORIZATION_SOCKET", (dir / "missing.sock").c_str(), 1);
+  auto key = x509::generate_key();
+  auto cert = x509::generate_x509(key);
+  const auto cert_path = (dir / "cert.pem").string();
+  const auto key_path = (dir / "key.pem").string();
+  {
+    std::ofstream out(cert_path);
+    out << x509::get_cert_pem(cert);
+  }
+  {
+    std::ofstream out(key_path);
+    out << x509::get_pkey_content(key);
+  }
+  auto bus = std::make_shared<events::EventBusType>();
+  auto running = std::make_shared<immer::atom<immer::vector<events::StreamSession>>>();
+  auto cfg = state::load_or_default("config.test.toml", bus, running);
+  auto app = state::get_moonlight_profile(cfg).value()->apps->load()->at(0);
+  state::Host host{};
+  host.internal_ip = "127.0.0.1";
+  host.local_base_state_folder = dir.string();
+  host.host_base_state_folder = dir.string();
+  auto state = immer::box<state::AppState>(state::AppState{.config = immer::box<state::Config>(cfg),
+                                                           .host = immer::box<state::Host>(host),
+                                                           .event_bus = bus,
+                                                           .running_sessions = running});
+  const state::PairedClient client{.client_cert = x509::get_cert_pem(cert), .app_state_folder = "user-a"};
+  std::string path;
+  SECTION("Launch is refused before creating stream state") {
+    path = "/launch";
+  }
+  SECTION("Resume is refused before replacing stream keys") {
+    path = "/resume";
+    auto existing =
+        state::create_stream_session(state, *app, client, {1920, 1080, 60}, 2, "00112233445566778899aabbccddeeff", "1");
+    running->update([existing](auto sessions) { return sessions.push_back(*existing); });
+  }
+  const auto before = running->load();
+  HttpsServer server(cert_path, key_path);
+  server.config.port = 0;
+  server.config.address = "127.0.0.1";
+  server.resource["^/launch$"]["GET"] = [state, client](auto response, auto request) {
+    endpoints::https::launch(response, request, client, state);
+  };
+  server.resource["^/resume$"]["GET"] = [state, client](auto response, auto request) {
+    endpoints::https::resume(response, request, client, state);
+  };
+  std::promise<unsigned short> port;
+  auto ready = port.get_future();
+  std::thread worker([&] { server.start([&](auto p) { port.set_value(p); }); });
+  auto stop = std::shared_ptr<void>(nullptr, [&](void *) {
+    server.stop();
+    worker.join();
+  });
+  REQUIRE(ready.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+  auto url = "https://127.0.0.1:" + std::to_string(ready.get()) + path + "?appid=" + app->base.id +
+             "&rikey=ffeeddccbbaa99887766554433221100&rikeyid=2&corever=1";
+  std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROXY, "*");
+  curl_easy_setopt(curl.get(), CURLOPT_SSLCERT, cert_path.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_SSLKEY, key_path.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYPEER, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYHOST, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 5L);
+  std::string body;
+  curl_easy_setopt(
+      curl.get(),
+      CURLOPT_WRITEFUNCTION,
+      +[](char *data, size_t size, size_t count, void *out) -> size_t {
+        static_cast<std::string *>(out)->append(data, size * count);
+        return size * count;
+      });
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+  REQUIRE(curl_easy_perform(curl.get()) == CURLE_OK);
+  REQUIRE(body.find("status_code=\"403\"") != std::string::npos);
+  REQUIRE(running->load()->size() == before->size());
+  if (!before->empty()) {
+    REQUIRE(running->load()->at(0).aes_key == before->at(0).aes_key);
+  }
+}
+
+TEST_CASE("Stream authorization accepts only an explicit fresh approval", "[Security][StreamAuthorization]") {
+  const auto dir = std::filesystem::temp_directory_path() / ("wolf-authz-callback-" + state::gen_uuid());
+  std::filesystem::create_directories(dir);
+  auto cleanup = std::shared_ptr<void>(nullptr, [dir](void *) {
+    unsetenv("WOLF_SESSION_AUTHORIZATION_SOCKET");
+    unsetenv("WOLF_REQUIRE_SESSION_AUTHORIZATION");
+    std::filesystem::remove_all(dir);
+  });
+  auto key = x509::generate_key();
+  const wolf::config::PairedClient client{.client_cert = x509::get_cert_pem(x509::generate_x509(key)),
+                                          .app_state_folder = "/private/user-a"};
+  setenv("WOLF_REQUIRE_SESSION_AUTHORIZATION", "TRUE", 1);
+  bool missing_socket = false;
+  const auto socket_path = (dir / "authorize.sock").string();
+  setenv("WOLF_SESSION_AUTHORIZATION_SOCKET", socket_path.c_str(), 1);
+  unsigned status = 403;
+  SECTION("Required authorization cannot fall back to pairing") {
+    missing_socket = true;
+  }
+  SECTION("An explicit approval permits the request") {
+    status = 204;
+  }
+  SECTION("A denial is refused") {
+    status = 403;
+  }
+  SECTION("An ordinary successful response is not an authorization") {
+    status = 200;
+  }
+  SECTION("A redirect is not followed") {
+    status = 302;
+  }
+  boost::asio::io_context io;
+  boost::asio::local::stream_protocol::acceptor acceptor(io,
+                                                         boost::asio::local::stream_protocol::endpoint(socket_path));
+  bool correct_request = false;
+  std::thread worker([&] {
+    boost::asio::local::stream_protocol::socket socket(io);
+    acceptor.accept(socket);
+    boost::asio::streambuf buffer;
+    auto header_size = boost::asio::read_until(socket, buffer, "\r\n\r\n");
+    std::string wire(boost::asio::buffers_begin(buffer.data()), boost::asio::buffers_end(buffer.data()));
+    auto length_at = wire.find("Content-Length:");
+    if (length_at == std::string::npos) {
+      auto response = std::string("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      boost::asio::write(socket, boost::asio::buffer(response));
+      return;
+    }
+    auto length = std::stoul(wire.substr(length_at + 15));
+    if (wire.size() < header_size + length) {
+      boost::asio::read(socket, buffer, boost::asio::transfer_exactly(header_size + length - wire.size()));
+      wire.assign(boost::asio::buffers_begin(buffer.data()), boost::asio::buffers_end(buffer.data()));
+    }
+    auto request = rfl::json::read<endpoints::https::SessionAuthorizationRequest>(wire.substr(header_size));
+    correct_request = request && request->action == "launch" && request->app_id == "123" &&
+                      request->state_folder == client.app_state_folder && request->certificate_sha256.size() == 64;
+    auto response = "HTTP/1.1 " + std::to_string(status) + " Result\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    boost::asio::write(socket, boost::asio::buffer(response));
+  });
+  const bool allowed = endpoints::https::session_authorized(client, "123", "launch");
+  worker.join();
+  REQUIRE(correct_request);
+  REQUIRE(allowed == (status == 204));
 }

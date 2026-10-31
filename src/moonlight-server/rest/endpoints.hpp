@@ -15,6 +15,7 @@
 #include <range/v3/view.hpp>
 #include <rest/helpers.hpp>
 #include <rest/rest.hpp>
+#include <rest/stream-authorization.hpp>
 #include <rtp/udp-ping.hpp>
 #include <state/config.hpp>
 #include <state/sessions.hpp>
@@ -456,6 +457,13 @@ void launch(const std::shared_ptr<typename SimpleWeb::Server<SimpleWeb::HTTPS>::
     return;
   }
 
+  if (!session_authorized(current_client, app.value()->base.id, "launch")) {
+    send_xml<SimpleWeb::HTTPS>(response,
+                               SimpleWeb::StatusCode::success_ok,
+                               moonlight::launch_error(403, "No active session authorizes this launch."));
+    return;
+  }
+
   // Re-launching while a session is already running would start a second runner that removes the
   // live container out from under the first one. Resume the existing session instead.
   if (state::get_session_by_client(state->running_sessions->load(), current_client)) {
@@ -492,6 +500,12 @@ void resume(const std::shared_ptr<typename SimpleWeb::Server<SimpleWeb::HTTPS>::
   }
   auto old_session = state::get_session_by_client(state->running_sessions->load(), current_client);
   if (old_session) {
+    if (!session_authorized(current_client, old_session->app->base.id, "resume")) {
+      send_xml<SimpleWeb::HTTPS>(response,
+                                 SimpleWeb::StatusCode::success_ok,
+                                 moonlight::launch_error(403, "No active session authorizes this resume."));
+      return;
+    }
     auto new_session =
         create_run_session(request->parse_query_string(), client_ip, current_client, state, *old_session->app);
     // Carry over the old session display handle
