@@ -267,10 +267,13 @@ bool DockerAPI::start_by_id(std::string_view id) const {
 
 bool DockerAPI::stop_by_id(std::string_view id, int timeout_seconds) const {
   if (auto conn = docker_connect(socket_path)) {
-    auto raw_msg = req(
-        conn.value().get(),
-        POST,
-        fmt::format("http://localhost/{}/containers/{}/stop?t={}", docker_api_version, id, timeout_seconds));
+    auto url = fmt::format("http://localhost/{}/containers/{}/stop", docker_api_version, id);
+    // Supplying t=2 overrides Docker's per-container StopTimeout, truncating
+    // orderly shutdown (and Steam Cloud uploads) even when the app allows longer.
+    if (timeout_seconds >= 0) {
+      url += fmt::format("?t={}", timeout_seconds);
+    }
+    auto raw_msg = req(conn.value().get(), POST, url);
     if (raw_msg && (raw_msg->first == 204 || raw_msg->first == 304)) {
       return true;
     } else if (raw_msg) {

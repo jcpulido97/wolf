@@ -1,4 +1,8 @@
 #include <api/api.hpp>
+#include <charconv>
+#include <helpers/utils.hpp>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace wolf::api {
 
@@ -19,6 +23,22 @@ UnixSocketServer::UnixSocketServer(boost::asio::io_context &io_context,
                                    immer::box<state::AppState> app_state) {
 
   state_ = std::make_shared<UnixSocketState>(io_context, app_state, socket_path);
+
+  // Recreated on every boot: never rely on a one-time host chmod. The Agent
+  // receives only this restricted socket group, never the Docker socket.
+  if (::chmod(socket_path.c_str(), 0600) != 0) {
+    throw std::runtime_error("Cannot restrict Wolf API socket");
+  }
+  const std::string group = utils::get_env("WOLF_SOCKET_GROUP", "");
+  if (!group.empty()) {
+    unsigned int gid = 0;
+    const auto parsed = std::from_chars(group.data(), group.data() + group.size(), gid);
+    if (parsed.ec != std::errc{} || parsed.ptr != group.data() + group.size() ||
+        ::chown(socket_path.c_str(), static_cast<uid_t>(-1), static_cast<gid_t>(gid)) != 0 ||
+        ::chmod(socket_path.c_str(), 0660) != 0) {
+      throw std::runtime_error("Cannot assign Wolf API socket group");
+    }
+  }
 
   state_->http.add(HTTPMethod::GET,
                    "/api/v1/events",
@@ -70,6 +90,16 @@ UnixSocketServer::UnixSocketServer(boost::asio::io_context &io_context,
                        .response_description = {{200, {.json_schema = rfl::json::to_schema<PairedClientsResponse>()}}},
                        .handler = [this](auto req, auto socket) { endpoint_PairedClients(req, socket); },
                    });
+
+  state_->http.add(
+      HTTPMethod::GET,
+      "/api/v1/encryption",
+      {
+          .summary = "Get the stream encryption policy",
+          .description = "The LAN and WAN encryption modes in effect and the streams this build encrypts.",
+          .response_description = {{200, {.json_schema = rfl::json::to_schema<EncryptionPolicyResponse>()}}},
+          .handler = [this](auto req, auto socket) { endpoint_EncryptionPolicy(req, socket); },
+      });
 
   state_->http.add(
       HTTPMethod::POST,

@@ -146,6 +146,21 @@ TEST_CASE("Pair APIs", "[API]") {
                       "\"h_scroll_acceleration\":10.199999809265137,"
                       "\"motion_controller_override\":\"AUTO\"}}]}"));
 
+  { // The encryption policy follows the environment
+    setenv("WOLF_LAN_ENCRYPTION_MODE", "optional", 1);
+    setenv("WOLF_WAN_ENCRYPTION_MODE", "required", 1);
+    response = req(curl.get(), HTTPMethod::GET, "http://localhost/api/v1/encryption");
+    REQUIRE(response);
+    REQUIRE_THAT(response->second,
+                 Equals("{\"success\":true,\"lan_mode\":\"optional\",\"wan_mode\":\"required\","
+                        "\"features\":[\"rtsp\",\"control_v2\",\"video\",\"audio\"]}"));
+    unsetenv("WOLF_LAN_ENCRYPTION_MODE");
+    unsetenv("WOLF_WAN_ENCRYPTION_MODE");
+    response = req(curl.get(), HTTPMethod::GET, "http://localhost/api/v1/encryption");
+    REQUIRE(response);
+    REQUIRE_THAT(response->second, ContainsSubstring("\"lan_mode\":\"disabled\",\"wan_mode\":\"optional\""));
+  }
+
   auto pair_promise = std::make_shared<boost::promise<std::string>>();
 
   // Simulate a Moonlight pairing request
@@ -805,4 +820,15 @@ TEST_CASE("SSE APIs", "[API]") {
   REQUIRE(event.has_value());
   REQUIRE_THAT(event->event, Equals("wolf::core::events::IDRRequestEvent"));
   REQUIRE_THAT(event->data, Equals("{\"session_id\":\"42\"}"));
+}
+
+TEST_CASE("Unix control socket has no world permissions", "[Security][SocketSecurity]") {
+  const auto dir = std::filesystem::temp_directory_path() / ("wolf-socket-permissions-" + state::gen_uuid());
+  std::filesystem::create_directories(dir);
+  auto cleanup = std::shared_ptr<void>(nullptr, [dir](void *) { std::filesystem::remove_all(dir); });
+  const auto path = (dir / "wolf.sock").string();
+  boost::asio::io_context io;
+  UnixSocketServer server(io, path, immer::box<state::AppState>(state::AppState{}));
+  REQUIRE((std::filesystem::status(path).permissions() & std::filesystem::perms::others_all) ==
+          std::filesystem::perms::none);
 }

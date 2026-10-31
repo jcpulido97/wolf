@@ -57,6 +57,19 @@ void UnixSocketServer::endpoint_PairedClients(const HTTPRequest &req, std::share
   send_http(socket, 200, rfl::json::write(res));
 }
 
+void UnixSocketServer::endpoint_EncryptionPolicy(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
+  auto res = EncryptionPolicyResponse{
+      .success = true,
+      .lan_mode = std::string(moonlight::encryption::to_string(state::lan_encryption_mode())),
+      .wan_mode = std::string(moonlight::encryption::to_string(state::wan_encryption_mode())),
+      .features = {"rtsp", "control_v2", "video", "audio"}};
+  if (std::string(utils::get_env("WOLF_REQUIRE_SESSION_AUTHORIZATION", "FALSE")) == "TRUE" ||
+      !std::string(utils::get_env("WOLF_SESSION_AUTHORIZATION_SOCKET", "")).empty()) {
+    res.features.push_back("session_authorization");
+  }
+  send_http(socket, 200, rfl::json::write(res));
+}
+
 void UnixSocketServer::endpoint_UnpairClient(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
   try {
     auto payload_result = rfl::json::read<UnpairClientRequest>(req.body);
@@ -108,7 +121,16 @@ void UnixSocketServer::endpoint_AddApp(const HTTPRequest &req, std::shared_ptr<U
             ranges::views::transform([app = app.value(), this](const immer::box<events::Profile> &profile) {
               if (profile->id == events::MOONLIGHT_PROFILE_ID) {
                 profile->apps->update([app, this](auto &apps) {
-                  return apps.push_back(rfl::Reflector<events::App>::to(app, this->state_->app_state->event_bus));
+                  auto added = rfl::Reflector<events::App>::to(app, this->state_->app_state->event_bus);
+                  // An API client has no way to know the caps this host's
+                  // producer runs with — they follow from the encoder Wolf
+                  // picked at startup and from zero copy. Inherit them from an
+                  // app that already has them rather than letting the request
+                  // decide, exactly as a session created without an app does.
+                  if (!app.video_producer_buffer_caps && !apps.empty()) {
+                    added.video_producer_buffer_caps = apps.front()->video_producer_buffer_caps;
+                  }
+                  return apps.push_back(std::move(added));
                 });
               }
               return profile;
@@ -279,7 +301,8 @@ void UnixSocketServer::endpoint_StreamSessionAdd(const HTTPRequest &req, std::sh
                                .av1_supported = state_->app_state->config->support_av1},
         ss.audio_channel_count,
         ss.aes_key,
-        ss.aes_iv);
+        ss.aes_iv,
+        state::encryption_mode_for(ss.client_ip));
     new_session->ip = ss.client_ip;
     new_session->rtsp_fake_ip = ss.rtsp_fake_ip;
 

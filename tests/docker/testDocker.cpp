@@ -3,12 +3,15 @@
 #include <catch2/matchers/catch_matchers_contains.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
+#include <chrono>
 #include <core/docker.hpp>
 #include <docker/json_formatters.hpp>
+#include <memory>
 #include <rfl/toml.hpp>
 #include <runners/docker.hpp>
 #include <state/config.hpp>
 #include <state/serialised_config.hpp>
+#include <thread>
 
 using Catch::Matchers::Contains;
 using Catch::Matchers::Equals;
@@ -620,4 +623,41 @@ TEST_CASE("Docker 29.1.5 fail to parse", "[DOCKER]") {
   REQUIRE(parsed_container.ports[0].private_port == -1); // This was causing issues because we get an empty string now
   REQUIRE(parsed_container.ports[0].public_port == 22);
   REQUIRE(parsed_container.ports[0].type == docker::TCP);
+}
+
+TEST_CASE("Docker stop honors the container shutdown grace", "[DOCKER][Shutdown]") {
+  docker::init();
+  auto docker_socket = utils::get_env("DOCKER_SOCKET_PATH", "/var/run/docker.sock");
+  docker::DockerAPI docker_api(docker_socket);
+  docker::Container container = {
+      .id = "",
+      .name = "WolfTestShutdownGrace",
+      .image = utils::get_env("WOLF_DOCKER_TEST_IMAGE", "ubuntu:24.04"),
+      .status = docker::CREATED,
+  };
+  auto created = docker_api.create(container, R"({
+    "Entrypoint": ["/bin/sh", "-c", "trap 'sleep 3; echo cloud-work-finished; exit 0' TERM; echo ready; while :; do sleep 1 & wait $!; done"],
+    "StopTimeout": 6,
+    "HostConfig": {"NetworkMode": "none"}
+  })");
+  REQUIRE(created.has_value());
+  auto cleanup = std::shared_ptr<void>(nullptr, [&](void *) { docker_api.remove_by_id(created->id, false, true); });
+  REQUIRE(docker_api.start_by_id(created->id));
+  bool ready = false;
+  for (int attempt = 0; attempt < 150; ++attempt) {
+    if (docker_api.get_logs(created->id).find("ready") != std::string::npos) {
+      ready = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  REQUIRE(ready);
+  SECTION("configured grace permits work taking longer than two seconds") {
+    REQUIRE(docker_api.stop_by_id(created->id));
+    REQUIRE(docker_api.get_logs(created->id).find("cloud-work-finished") != std::string::npos);
+  }
+  SECTION("an explicit short timeout still overrides the container setting") {
+    REQUIRE(docker_api.stop_by_id(created->id, 1));
+    REQUIRE(docker_api.get_logs(created->id).find("cloud-work-finished") == std::string::npos);
+  }
 }
